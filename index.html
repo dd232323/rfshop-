@@ -629,7 +629,7 @@
 
   <footer>
     <span>rfshop © 2025</span>
-    <span>ip-api.com · discord api · github</span>
+    <span>ipapi.co · freeipapi · discord · github</span>
   </footer>
 </div>
 
@@ -686,52 +686,127 @@ function flagEmoji(code) {
   return code.toUpperCase().replace(/./g, c => String.fromCodePoint(0x1F1E0 - 65 + c.charCodeAt(0)));
 }
 
-// ── IP LOOKUP ──────────────────────────────────────────────
+// ── IP LOOKUP — HTTPS only, no key needed ───────────────────
+async function tryFetch(url, parse) {
+  try {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 7000);
+    const r = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(tid);
+    if (!r.ok) return null;
+    const j = await r.json();
+    return parse(j);
+  } catch(_) { return null; }
+}
+
+async function fetchIPData(ip) {
+  const strategies = [
+    // 1. ipapi.co — HTTPS natif, CORS ouvert
+    () => tryFetch(
+      `https://ipapi.co/${ip}/json/`,
+      d => !d.error && d.latitude ? {
+        ip:d.ip, country:d.country_name, countryCode:d.country_code,
+        region:d.region, city:d.city, postal:d.postal,
+        lat:d.latitude, lon:d.longitude, timezone:d.timezone,
+        isp:d.org, org:d.org, asn:d.asn, ok:true
+      } : null
+    ),
+    // 2. freeipapi.com — HTTPS, CORS ouvert, gratuit
+    () => tryFetch(
+      `https://freeipapi.com/api/json/${ip}`,
+      d => d.ipAddress ? {
+        ip:d.ipAddress, country:d.countryName, countryCode:d.countryCode,
+        region:d.regionName, city:d.cityName, postal:d.zipCode,
+        lat:d.latitude, lon:d.longitude, timezone:d.timeZone,
+        isp:d.isp||null, org:null, asn:null, ok:true
+      } : null
+    ),
+    // 3. ipwho.is — HTTPS, CORS ouvert
+    () => tryFetch(
+      `https://ipwho.is/${ip}`,
+      d => d.success ? {
+        ip:d.ip, country:d.country, countryCode:d.country_code,
+        region:d.region, city:d.city, postal:d.postal,
+        lat:d.latitude, lon:d.longitude, timezone:d.timezone?.id||null,
+        isp:d.connection?.isp||null, org:d.connection?.org||null,
+        asn:d.connection?.asn ? 'AS'+d.connection.asn : null, ok:true
+      } : null
+    ),
+    // 4. ip.guide — HTTPS, pas de clé
+    () => tryFetch(
+      `https://ip.guide/${ip}`,
+      d => d.location ? {
+        ip:d.ip||ip, country:d.location.country_name, countryCode:d.location.country_code,
+        region:d.location.region_name, city:d.location.city,
+        postal:d.location.zip_code, lat:d.location.latitude, lon:d.location.longitude,
+        timezone:d.location.time_zone, isp:d.network?.autonomous_system?.organization||null,
+        org:d.network?.autonomous_system?.organization||null,
+        asn:d.network?.autonomous_system?.asn ? 'AS'+d.network.autonomous_system.asn : null, ok:true
+      } : null
+    ),
+  ];
+
+  for (const fn of strategies) {
+    const r = await fn();
+    if (r?.ok) return r;
+  }
+  return { ok: false };
+}
+
 async function lookupIP() {
   let ip = $('ip-input').value.trim();
   if (!ip) { setError('ip-result', 'Entre une adresse IP valide.'); return; }
   setLoading('ip-result');
   saveHistory('ip', ip);
-  try {
-    const res = await fetch(`https://ip-api.com/json/${ip}?fields=status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org,as,query`);
-    const d = await res.json();
-    if (d.status === 'fail') { setError('ip-result', d.message || 'IP introuvable.'); return; }
 
-    $('ip-result').innerHTML = `
-      <div class="result-panel">
-        <div class="result-header">
-          <span class="result-title">// IP Intelligence</span>
-          <span class="result-status"><span class="dot"></span>${d.query}</span>
-        </div>
-        <div class="result-grid">
-          ${card('Adresse IP', d.query, 'accent')}
-          ${card('Pays', `${flagEmoji(d.countryCode)} ${d.country}`)}
-          ${card('Région', d.regionName)}
-          ${card('Ville', d.city)}
-          ${card('Code postal', d.zip)}
-          ${card('Fuseau horaire', d.timezone)}
-          ${card('ISP', d.isp)}
-          ${card('Organisation', d.org)}
-          ${card('AS', d.as)}
-          <div class="result-card wide">
-            <div class="card-label">Localisation</div>
-            <div class="map-placeholder" style="height:180px;background:#0a0e1a;border-radius:8px;border:1px solid var(--border);margin-top:8px;">
-              <svg viewBox="0 0 800 400" xmlns="http://www.w3.org/2000/svg">
-                <defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#00f5c4" stroke-width="0.5"/></pattern></defs>
-                <rect width="100%" height="100%" fill="url(#g)"/>
-                <circle cx="${((d.lon+180)/360*800).toFixed(0)}" cy="${((90-d.lat)/180*400).toFixed(0)}" r="6" fill="#00f5c4" opacity="0.9"/>
-                <circle cx="${((d.lon+180)/360*800).toFixed(0)}" cy="${((90-d.lat)/180*400).toFixed(0)}" r="18" fill="none" stroke="#00f5c4" stroke-width="1" opacity="0.4"/>
-                <circle cx="${((d.lon+180)/360*800).toFixed(0)}" cy="${((90-d.lat)/180*400).toFixed(0)}" r="32" fill="none" stroke="#00f5c4" stroke-width="0.5" opacity="0.2"/>
-              </svg>
-              <div style="position:absolute;bottom:12px;left:50%;transform:translateX(-50%);font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--accent);">${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}</div>
-            </div>
+  const d = await fetchIPData(ip);
+  if (!d.ok) {
+    setError('ip-result', 'IP introuvable ou toutes les APIs sont inaccessibles depuis ce réseau.');
+    return;
+  }
+
+  const lat = d.lat, lon = d.lon;
+  const cx = ((lon + 180) / 360 * 800).toFixed(0);
+  const cy = ((90 - lat) / 180 * 400).toFixed(0);
+
+  $('ip-result').innerHTML = `
+    <div class="result-panel">
+      <div class="result-header">
+        <span class="result-title">// IP Intelligence</span>
+        <span class="result-status"><span class="dot"></span>${d.ip}</span>
+      </div>
+      <div class="result-grid">
+        ${card('Adresse IP', d.ip, 'accent')}
+        ${card('Pays', `${flagEmoji(d.countryCode)} ${d.country}`)}
+        ${card('Région', d.region)}
+        ${card('Ville', d.city)}
+        ${card('Code postal', d.postal)}
+        ${card('Fuseau horaire', d.timezone)}
+        ${card('ISP', d.isp)}
+        ${card('Organisation', d.org)}
+        ${card('ASN', d.asn)}
+        <div class="result-card wide">
+          <div class="card-label">Localisation — ${lat.toFixed(4)}°, ${lon.toFixed(4)}°</div>
+          <div style="height:180px;background:#0a0e1a;border-radius:8px;border:1px solid var(--border);margin-top:8px;overflow:hidden;position:relative;">
+            <svg viewBox="0 0 800 400" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+              <defs>
+                <pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse">
+                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#00f5c4" stroke-width="0.4"/>
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#g)"/>
+              <circle cx="${cx}" cy="${cy}" r="6" fill="#00f5c4" opacity="0.95"/>
+              <circle cx="${cx}" cy="${cy}" r="0" fill="none" stroke="#00f5c4" stroke-width="2" opacity="0.7">
+                <animate attributeName="r" values="6;40" dur="2.5s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" values="0.7;0" dur="2.5s" repeatCount="indefinite"/>
+              </circle>
+            </svg>
+            <div style="position:absolute;bottom:10px;right:14px;font-family:'Space Mono',monospace;font-size:0.68rem;color:var(--accent);">${lat.toFixed(4)}°N ${lon.toFixed(4)}°E</div>
           </div>
         </div>
-      </div>`;
-    animateCards();
-  } catch(e) {
-    setError('ip-result', 'Erreur réseau. Vérifie ta connexion.');
-  }
+      </div>
+    </div>`;
+  animateCards();
 }
 
 // ── DISCORD LOOKUP ─────────────────────────────────────────
@@ -749,73 +824,120 @@ async function lookupDiscord() {
   const processID = (snowflake & 0x1F000n) >> 12n;
   const increment = snowflake & 0xFFFn;
 
-  try {
-    // Public Discord widget endpoint (no auth needed)
-    const res = await fetch(`https://discord.com/api/v9/users/${id}`, {
-      headers: { 'Authorization': 'Bearer' }
-    });
+  // Run both APIs in parallel
+  let lanyardData = null;
+  let discordProfile = null;
 
-    // Use widgetbot or lanyard as fallback
-    // Actually just show snowflake info + try Lanyard
-    let userData = null;
-    try {
-      const lanyard = await fetch(`https://api.lanyard.rest/v1/users/${id}`);
-      if (lanyard.ok) {
-        const ld = await lanyard.json();
-        if (ld.success) userData = ld.data;
-      }
-    } catch(_) {}
+  await Promise.allSettled([
+    // Lanyard — status, presence, guilds
+    fetch(`https://api.lanyard.rest/v1/users/${id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (j?.success) lanyardData = j.data; }),
+    // discord.id public lookup (no auth, returns basic profile + banner)
+    fetch(`https://discord.id/api/fetch/?q=${id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (j) discordProfile = j; }),
+  ]);
 
-    const avatarUrl = userData?.discord_user?.avatar
-      ? `https://cdn.discordapp.com/avatars/${id}/${userData.discord_user.avatar}.png?size=128`
-      : null;
+  const user = lanyardData?.discord_user || discordProfile || {};
+  const username  = user.username || discordProfile?.tag?.split('#')[0] || null;
+  const globalName = user.global_name || discordProfile?.global_name || username;
+  const discriminator = user.discriminator;
+  const avatarHash = user.avatar || discordProfile?.avatar;
+  const bannerHash = user.banner || discordProfile?.banner;
+  const accentColor = user.accent_color || discordProfile?.accent_color;
 
-    const username = userData?.discord_user?.username || null;
-    const globalName = userData?.discord_user?.global_name || null;
-    const discriminator = userData?.discord_user?.discriminator;
-    const status = userData?.discord_status;
+  const avatarUrl = avatarHash
+    ? `https://cdn.discordapp.com/avatars/${id}/${avatarHash}.${avatarHash.startsWith('a_') ? 'gif' : 'png'}?size=256`
+    : `https://cdn.discordapp.com/embed/avatars/${Number(id) % 5}.png`;
 
-    const statusColors = { online: '#43b581', idle: '#faa61a', dnd: '#f04747', offline: '#747f8d' };
-    const statusLabels = { online: 'En ligne', idle: 'Inactif', dnd: 'Ne pas déranger', offline: 'Hors ligne' };
+  const bannerUrl = bannerHash
+    ? `https://cdn.discordapp.com/banners/${id}/${bannerHash}.${bannerHash.startsWith('a_') ? 'gif' : 'png'}?size=600`
+    : null;
 
-    $('discord-result').innerHTML = `
-      <div class="result-panel">
-        <div class="result-header">
-          <span class="result-title">// Discord Intelligence</span>
-          <span class="result-status"><span class="dot" style="background:var(--accent2);box-shadow:0 0 8px var(--accent2)"></span>${id}</span>
-        </div>
-        <div class="result-grid">
-          <div class="result-card wide">
-            <div class="discord-name-block">
-              ${avatarUrl
-                ? `<img src="${avatarUrl}" class="discord-avatar" onerror="this.style.display='none'">`
-                : `<div class="avatar-placeholder">${username ? username[0].toUpperCase() : '?'}</div>`}
-              <div>
-                <div class="discord-tag">${globalName || username || 'Inconnu'}</div>
-                ${username ? `<div class="discord-sub">@${username}${discriminator && discriminator !== '0' ? '#'+discriminator : ''}</div>` : ''}
-                ${status ? `<div style="margin-top:6px;display:inline-flex;align-items:center;gap:5px;font-family:'Space Mono',monospace;font-size:0.7rem;color:${statusColors[status]}">
-                  <span style="width:8px;height:8px;border-radius:50%;background:${statusColors[status]};display:inline-block;"></span>
-                  ${statusLabels[status] || status}
-                </div>` : ''}
+  const status = lanyardData?.discord_status;
+  const statusColors = { online: '#43b581', idle: '#faa61a', dnd: '#f04747', offline: '#747f8d' };
+  const statusLabels = { online: '🟢 En ligne', idle: '🟡 Inactif', dnd: '🔴 Ne pas déranger', offline: '⚫ Hors ligne' };
+
+  const guilds = lanyardData?.guilds || [];
+  const activities = lanyardData?.activities || [];
+
+  const accentHex = accentColor ? '#' + accentColor.toString(16).padStart(6, '0') : 'var(--accent2)';
+
+  $('discord-result').innerHTML = `
+    <div class="result-panel">
+      <div class="result-header">
+        <span class="result-title">// Discord Intelligence</span>
+        <span class="result-status"><span class="dot" style="background:var(--accent2);box-shadow:0 0 8px var(--accent2)"></span>${id}</span>
+      </div>
+      <div class="result-grid">
+
+        <!-- PROFILE CARD -->
+        <div class="result-card wide" style="padding:0;overflow:hidden;border-color:rgba(123,97,255,0.3)">
+          <!-- BANNER -->
+          <div style="height:120px;background:${bannerUrl ? 'transparent' : accentHex};position:relative;overflow:hidden;">
+            ${bannerUrl
+              ? `<img src="${bannerUrl}" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentElement.style.background='${accentHex}'">`
+              : `<div style="width:100%;height:100%;background:linear-gradient(135deg,${accentHex}88,#090b10)"></div>`}
+          </div>
+          <!-- AVATAR + INFO -->
+          <div style="padding:0 22px 22px;position:relative;margin-top:-42px;">
+            <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:14px;">
+              <img src="${avatarUrl}" style="width:80px;height:80px;border-radius:50%;border:4px solid #0e1117;box-shadow:0 0 0 3px ${accentHex}60;flex-shrink:0" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+              <div style="padding-bottom:4px">
+                <div style="font-size:1.3rem;font-weight:800;line-height:1.1">${globalName || username || 'Inconnu'}</div>
+                ${username ? `<div style="font-family:'Space Mono',monospace;font-size:0.75rem;color:var(--muted)">@${username}${discriminator && discriminator !== '0' ? '#'+discriminator : ''}</div>` : ''}
+                ${status ? `<div style="margin-top:5px;font-family:'Space Mono',monospace;font-size:0.72rem;color:${statusColors[status]}">${statusLabels[status]}</div>` : ''}
               </div>
             </div>
-            ${userData?.activities?.length ? `<div style="margin-top:12px;font-family:'Space Mono',monospace;font-size:0.75rem;color:var(--muted)">
-              Activité: <span style="color:var(--text)">${userData.activities[0].name || ''}</span>
+            ${activities.length ? `<div style="background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-top:4px">
+              <div style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Activité</div>
+              ${activities.slice(0,2).map(a => `<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+                ${a.assets?.large_image ? `<img src="https://cdn.discordapp.com/app-assets/${a.application_id}/${a.assets.large_image}.png" style="width:32px;height:32px;border-radius:5px" onerror="this.style.display='none'">` : ''}
+                <div>
+                  <div style="font-size:0.82rem;font-weight:600">${a.name}</div>
+                  ${a.details ? `<div style="font-family:'Space Mono',monospace;font-size:0.68rem;color:var(--muted)">${a.details}</div>` : ''}
+                </div>
+              </div>`).join('')}
             </div>` : ''}
           </div>
-          ${card('User ID', id, 'purple')}
-          ${card('Compte créé', timestamp.toLocaleDateString('fr-FR', {day:'2-digit',month:'long',year:'numeric'}))}
-          ${card('Heure création', timestamp.toLocaleTimeString('fr-FR'))}
-          ${card('Worker ID', workerID.toString())}
-          ${card('Process ID', processID.toString())}
-          ${card('Increment', increment.toString())}
-          ${card('Format Snowflake', `<span style="word-break:break-all;font-size:0.75rem">${snowflake.toString(2)}</span>`)}
         </div>
-      </div>`;
-    animateCards();
-  } catch(e) {
-    setError('discord-result', 'Erreur lors du lookup Discord.');
-  }
+
+        ${card('User ID', id, 'purple')}
+        ${card('Compte créé', timestamp.toLocaleDateString('fr-FR', {day:'2-digit',month:'long',year:'numeric'}))}
+        ${card('Heure création', timestamp.toLocaleTimeString('fr-FR'))}
+        ${card('Worker ID', workerID.toString())}
+        ${card('Process ID', processID.toString())}
+        ${card('Increment', increment.toString())}
+        ${accentColor ? card('Couleur accent', `<span style="display:inline-flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:50%;background:${accentHex};display:inline-block"></span>${accentHex}</span>`) : ''}
+
+        <!-- SERVEURS LANYARD -->
+        ${guilds.length ? `<div class="result-card wide">
+          <div class="card-label" style="margin-bottom:12px">Serveurs Discord (via Lanyard)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            ${guilds.slice(0, 20).map(g => {
+              const icon = g.icon
+                ? `<img src="https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=32" style="width:32px;height:32px;border-radius:8px;flex-shrink:0" onerror="this.style.background='#2d2f36'">`
+                : `<div style="width:32px;height:32px;border-radius:8px;background:var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:800">${(g.name||'?')[0]}</div>`;
+              return `<div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:6px 12px 6px 6px;font-size:0.78rem;max-width:220px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${g.name}">
+                ${icon}
+                <span style="overflow:hidden;text-overflow:ellipsis">${g.name || g.id}</span>
+              </div>`;
+            }).join('')}
+          </div>
+          ${guilds.length > 20 ? `<div style="margin-top:10px;font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted)">+${guilds.length-20} autres serveurs</div>` : ''}
+        </div>` : `<div class="result-card wide" style="border-color:rgba(123,97,255,0.15)">
+          <div class="card-label">Serveurs Discord</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.78rem;color:var(--muted);margin-top:8px">
+            Non disponible — l'utilisateur doit utiliser 
+            <a href="https://lanyard.rest" target="_blank" style="color:var(--accent2);text-decoration:none">Lanyard</a> 
+            pour exposer ses serveurs publiquement.
+          </div>
+        </div>`}
+
+      </div>
+    </div>`;
+  animateCards();
 }
 
 // ── USERNAME LOOKUP ────────────────────────────────────────
